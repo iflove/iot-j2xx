@@ -3,8 +3,8 @@ package android.iot.j2xx.example
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.support.v7.app.AppCompatActivity
 import android.util.Log
-import androidx.appcompat.app.AppCompatActivity
 import com.ftdi.j2xx.d2xx.D2xxController
 
 class MainActivity : AppCompatActivity(), D2xxController.D2xxEvent {

@@ -30,6 +30,7 @@ public class D2xxController implements Handler.Callback {
     private static final int MSG_READ_DATA = 0x002;
     private static final int MSG_WRITE_DATA = 0x003;
     private static final int MSG_OPENED_DEV = 0x004;
+    private static final int MSG_OPENED_DEV_FAIL = 0x005;
     /*port number*/
     public static final int DEFAULT_OPEN_INDEX = 0;
     public static final String PUPPET_FRAGMENT_TAG = "com.ftdi.j2xx.d2xx.D2xxController.PuppetFragment";
@@ -187,13 +188,19 @@ public class D2xxController implements Handler.Callback {
                 ftDev = d2xxManager.openByIndex(parentContext, tmpPortNumber);
             } else {
                 synchronized (ftDevObject) {
+                    ftDev.close();
                     ftDev = d2xxManager.openByIndex(parentContext, tmpPortNumber);
                 }
             }
+
             uartConfigured = false;
-            if (ftDev == null || !ftDev.isOpen()) {
+            if (ftDev == null || !ftDevIsOpen()) {
                 Log.w(TAG, "open device port(" + tmpPortNumber + ") NG, ftDev == null");
-                // TODO: 2019-12-06 D2xxEvent
+                if (uiHandler != null) {
+                    Message message = uiHandler.obtainMessage(MSG_OPENED_DEV_FAIL);
+                    message.obj = tmpPortNumber;
+                    uiHandler.sendMessageDelayed(message, 100);
+                }
                 return;
             }
             currentIndex = tmpPortNumber;
@@ -215,7 +222,7 @@ public class D2xxController implements Handler.Callback {
 
     private void configFtDev() {
         synchronized (ftDevObject) {
-            if (ftDev == null || !ftDev.isOpen() || uartConfigured) {
+            if (ftDev == null || !ftDevIsOpen() || uartConfigured) {
                 Log.w(TAG, " NG, configFtDev fail");
                 return;
             }
@@ -327,6 +334,18 @@ public class D2xxController implements Handler.Callback {
         }
     }
 
+    public boolean ftDevIsOpen() {
+        if (ftDev != null) {
+            try {
+                return ftDev.isOpen();
+                //hanle mIsOpen
+            } catch (NullPointerException e) {
+                e.printStackTrace();
+            }
+        }
+        return false;
+    }
+
     private void onStart() {
         createDeviceList();
     }
@@ -344,7 +363,7 @@ public class D2xxController implements Handler.Callback {
             return false;
         }
         synchronized (ftDevObject) {
-            return ftDev != null && ftDev.isOpen();
+            return ftDev != null && ftDevIsOpen();
         }
     }
 
@@ -405,7 +424,7 @@ public class D2xxController implements Handler.Callback {
                         public void run() {
                             createDeviceList();
                         }
-                    },1000);
+                    }, 1000);
                 }
 
                 if (getD2xxEvent() != null) {
@@ -429,7 +448,7 @@ public class D2xxController implements Handler.Callback {
                     return true;
                 }
                 synchronized (this.ftDevObject) {
-                    if (ftDev == null || !ftDev.isOpen()) {
+                    if (ftDev == null || !ftDevIsOpen()) {
                         return true;
                     }
                     int available = ftDev.getQueueStatus();
@@ -461,7 +480,7 @@ public class D2xxController implements Handler.Callback {
             }
             case MSG_WRITE_DATA: {
                 synchronized (this.ftDevObject) {
-                    if (ftDev == null || !ftDev.isOpen()) {
+                    if (ftDev == null || !ftDevIsOpen()) {
                         return true;
                     }
                     ftDev.setLatencyTimer((byte) 16);
@@ -478,6 +497,12 @@ public class D2xxController implements Handler.Callback {
                 }
                 break;
             }
+            case MSG_OPENED_DEV_FAIL: {
+                if (getD2xxEvent() != null) {
+                    getD2xxEvent().onOpenDevFail((int) message.obj);
+                }
+                break;
+            }
             default:
                 break;
         }
@@ -488,6 +513,8 @@ public class D2xxController implements Handler.Callback {
         void onDevAttached(Context context, Intent intent);
 
         void onDevDetached(Context context, Intent intent);
+
+        void onOpenDevFail(int port);
 
         void onOpenedDev(int port);
 
@@ -504,9 +531,13 @@ public class D2xxController implements Handler.Callback {
         @Override
         public void onActivityCreated(@Nullable Bundle savedInstanceState) {
             super.onActivityCreated(savedInstanceState);
-            if (this.d2xxController != null) {
-                this.d2xxController.registerUsbReceiver();
-                this.d2xxController.onStart();
+            try {
+                if (this.d2xxController != null) {
+                    this.d2xxController.registerUsbReceiver();
+                    this.d2xxController.onStart();
+                }
+            } catch (RuntimeException e) {
+                e.printStackTrace();
             }
         }
 
@@ -523,16 +554,24 @@ public class D2xxController implements Handler.Callback {
         @Override
         public void onStop() {
             super.onStop();
-            if (this.d2xxController != null) {
-                this.d2xxController.onStop();
+            try {
+                if (this.d2xxController != null) {
+                    this.d2xxController.onStop();
+                }
+            } catch (RuntimeException e) {
+                e.printStackTrace();
             }
         }
 
         @Override
         public void onDestroy() {
             super.onDestroy();
-            if (this.d2xxController != null) {
-                this.d2xxController.destroy();
+            try {
+                if (this.d2xxController != null) {
+                    this.d2xxController.destroy();
+                }
+            } catch (RuntimeException e) {
+                e.printStackTrace();
             }
         }
     }

@@ -8,6 +8,10 @@ import android.util.Log
 import com.ftdi.j2xx.d2xx.D2xxController
 
 class MainActivity : AppCompatActivity(), D2xxController.D2xxEvent {
+    override fun onOpenDevFail(port: Int) {
+        Log.i("xxa", "onOpenDevFa$port");
+    }
+
     override fun onOpenedDev(port: Int) {
         Log.i("xxa", "${D2xxController.with(this).isOpenedDev}" )
         D2xxController.with(this).write("00 01 ab")

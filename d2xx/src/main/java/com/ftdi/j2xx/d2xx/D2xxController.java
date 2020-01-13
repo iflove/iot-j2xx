@@ -15,7 +15,6 @@ import android.support.annotation.Nullable;
 import android.support.v4.app.Fragment;
 import android.support.v4.app.FragmentActivity;
 import android.support.v4.app.FragmentManager;
-import android.util.Log;
 
 import com.ftdi.j2xx.D2xxManager;
 import com.ftdi.j2xx.FT_Device;
@@ -25,15 +24,21 @@ import com.ftdi.j2xx.FT_Device;
  * Created by lazy on 2019-12-05
  */
 public class D2xxController implements Handler.Callback {
-    private static final String TAG = "D2xxController";
+    public static final String TAG = "D2xxController";
+    public static final String TAG_D2XX_WRITER = "D2xxWriter";
+    public static final String TAG_D2XX_READER = "D2xxReader";
     private static final int MSG_LOOP_READ_DATA = 0x001;
     private static final int MSG_READ_DATA = 0x002;
     private static final int MSG_WRITE_DATA = 0x003;
     private static final int MSG_OPENED_DEV = 0x004;
     private static final int MSG_OPENED_DEV_FAIL = 0x005;
+    private static final int MSG_NOT_FOUND_DEV = 0x006;
+    private static final int MSG_CHECK_DEV = 0x007;
     /*port number*/
     public static final int DEFAULT_OPEN_INDEX = 0;
     public static final String PUPPET_FRAGMENT_TAG = "com.ftdi.j2xx.d2xx.D2xxController.PuppetFragment";
+    public static final int CHECK_DEV_DELAY_MILLIS = 3000;
+    public static final int MAX_CHECK_DEV_COUNT = 5;
     private static D2xxController d2xxController;
     private Context parentContext;
 
@@ -41,6 +46,7 @@ public class D2xxController implements Handler.Callback {
     private FT_Device ftDev = null;
     private final Object ftDevObject = new Object();
 
+    private int checkCount = 0;
     private int devCount = -1;
     private int currentIndex = -1;
     private boolean succeeded;
@@ -87,7 +93,7 @@ public class D2xxController implements Handler.Callback {
             writeHandler = new Handler(writeHandlerThread.getLooper(), this);
             succeeded = true;
         } catch (D2xxManager.D2xxException ex) {
-            Log.e(TAG, "D2xxException" + ex.getMessage());
+            D2xxLog.error(TAG, "D2xxException" + ex.getMessage());
             succeeded = false;
         }
         /* by default it is 9600 */
@@ -128,7 +134,8 @@ public class D2xxController implements Handler.Callback {
         FragmentManager supportFragmentManager = puppetFragmentActivity.getSupportFragmentManager();
         Fragment fragment = supportFragmentManager.findFragmentByTag(PUPPET_FRAGMENT_TAG);
         if (fragment == null) {
-            PuppetFragment puppetFragment = new PuppetFragment(this);
+            PuppetFragment puppetFragment = new PuppetFragment();
+            puppetFragment.setD2xxController(this);
             supportFragmentManager.beginTransaction().add(android.R.id.content, puppetFragment, PUPPET_FRAGMENT_TAG).commitAllowingStateLoss();
         }
         return this;
@@ -144,15 +151,26 @@ public class D2xxController implements Handler.Callback {
 
     public void createDeviceList() {
         if (!isSucceeded()) {
-            Log.e(TAG, "D2xx load fail");
+            D2xxLog.error(TAG, "D2xx load fail");
             return;
         }
         int tempDevCount = d2xxManager.createDeviceInfoList(parentContext);
-        Log.d(TAG, "createDeviceList: " + tempDevCount);
+
+        D2xxLog.debug(TAG, "find dev count: " + tempDevCount);
         if (tempDevCount > 0 && tempDevCount != devCount) {
             devCount = tempDevCount;
             updatePortNumber();
             return;
+        } else {
+            if (uiHandler != null) {
+                Message message = uiHandler.obtainMessage(MSG_NOT_FOUND_DEV);
+                uiHandler.sendMessageDelayed(message, 100);
+
+                if (checkCount < MAX_CHECK_DEV_COUNT) {
+                    Message message1 = uiHandler.obtainMessage(MSG_CHECK_DEV);
+                    uiHandler.sendMessageDelayed(message1, CHECK_DEV_DELAY_MILLIS);
+                }
+            }
         }
         devCount = -1;
         currentIndex = -1;
@@ -176,7 +194,7 @@ public class D2xxController implements Handler.Callback {
     }
 
     public void write(final String hex) {
-        Log.i(TAG, "write: " + hex);
+        D2xxLog.info(TAG_D2XX_WRITER, "writing: " + hex);
         write(hexStringToByte(hex));
     }
 
@@ -195,7 +213,7 @@ public class D2xxController implements Handler.Callback {
 
             uartConfigured = false;
             if (ftDev == null || !ftDevIsOpen()) {
-                Log.w(TAG, "open device port(" + tmpPortNumber + ") NG, ftDev == null");
+                D2xxLog.warn(TAG, "open device port(" + tmpPortNumber + ") NG, ftDev == null");
                 if (uiHandler != null) {
                     Message message = uiHandler.obtainMessage(MSG_OPENED_DEV_FAIL);
                     message.obj = tmpPortNumber;
@@ -204,7 +222,7 @@ public class D2xxController implements Handler.Callback {
                 return;
             }
             currentIndex = tmpPortNumber;
-            Log.i(TAG, "open device port(" + tmpPortNumber + ") OK");
+            D2xxLog.info(TAG, "open device port(" + tmpPortNumber + ") OK");
 
             configFtDev();
 
@@ -223,7 +241,12 @@ public class D2xxController implements Handler.Callback {
     private void configFtDev() {
         synchronized (ftDevObject) {
             if (ftDev == null || !ftDevIsOpen() || uartConfigured) {
-                Log.w(TAG, " NG, configFtDev fail");
+                D2xxLog.warn(TAG, " NG, configFtDev fail");
+                if (uiHandler != null) {
+                    Message message = uiHandler.obtainMessage(MSG_OPENED_DEV_FAIL);
+                    message.obj = currentIndex;
+                    uiHandler.sendMessageDelayed(message, 100);
+                }
                 return;
             }
             // configure our port
@@ -302,7 +325,7 @@ public class D2xxController implements Handler.Callback {
             ftDev.setFlowControl(flowCtrlSetting, (byte) 0x0b, (byte) 0x0d);
 
             uartConfigured = true;
-            Log.i(TAG, "configFtDev: done");
+            D2xxLog.info(TAG, "configFtDev: done");
 
         }
     }
@@ -315,7 +338,7 @@ public class D2xxController implements Handler.Callback {
     }
 
     private void closeDev() {
-        Log.d(TAG, "closeDev: ");
+        D2xxLog.debug(TAG, "closeDev: ");
         devCount = -1;
         currentIndex = -1;
         uartConfigured = false;
@@ -352,6 +375,10 @@ public class D2xxController implements Handler.Callback {
 
     private void onStop() {
 
+    }
+
+    public Handler getUiHandler() {
+        return uiHandler;
     }
 
     public boolean isSucceeded() {
@@ -417,7 +444,7 @@ public class D2xxController implements Handler.Callback {
         public void onReceive(Context context, Intent intent) {
             String action = intent.getAction();
             if (UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(action)) {
-                Log.i(TAG, "ATTACHED...");
+                D2xxLog.info(TAG, "ATTACHED...");
                 if (uiHandler != null) {
                     uiHandler.postDelayed(new Runnable() {
                         @Override
@@ -431,7 +458,7 @@ public class D2xxController implements Handler.Callback {
                     getD2xxEvent().onDevAttached(context, intent);
                 }
             } else if (UsbManager.ACTION_USB_DEVICE_DETACHED.equals(action)) {
-                Log.i(TAG, "DETACHED...");
+                D2xxLog.info(TAG, "DETACHED...");
                 closeDev();
                 if (getD2xxEvent() != null) {
                     getD2xxEvent().onDevDetached(context, intent);
@@ -459,6 +486,7 @@ public class D2xxController implements Handler.Callback {
                         }
                         ftDev.read(readBuff, available);
                         String hexString = encodeHexString(readBuff);
+                        D2xxLog.info(TAG_D2XX_READER, "response: " + hexString);
                         if (uiHandler != null) {
                             Message obtainMessage = uiHandler.obtainMessage();
                             obtainMessage.what = MSG_READ_DATA;
@@ -486,7 +514,8 @@ public class D2xxController implements Handler.Callback {
                     ftDev.setLatencyTimer((byte) 16);
                     byte[] data = (byte[]) message.obj;
                     if (data != null) {
-                        ftDev.write(data, data.length);
+                        int len = ftDev.write(data, data.length);
+                        D2xxLog.info(TAG_D2XX_WRITER, "writed: " + len);
                     }
                 }
                 break;
@@ -503,6 +532,26 @@ public class D2xxController implements Handler.Callback {
                 }
                 break;
             }
+            case MSG_NOT_FOUND_DEV: {
+                if (getD2xxEvent() != null) {
+                    getD2xxEvent().onNotFoundDev();
+                }
+                break;
+            }
+            case MSG_CHECK_DEV: {
+                if (isOpenedDev()) {
+                    break;
+                }
+                try {
+                    if (d2xxController != null) {
+                        d2xxController.createDeviceList();
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+                checkCount++;
+                break;
+            }
             default:
                 break;
         }
@@ -514,6 +563,8 @@ public class D2xxController implements Handler.Callback {
 
         void onDevDetached(Context context, Intent intent);
 
+        void onNotFoundDev();
+
         void onOpenDevFail(int port);
 
         void onOpenedDev(int port);
@@ -524,7 +575,10 @@ public class D2xxController implements Handler.Callback {
     public static class PuppetFragment extends Fragment {
         private D2xxController d2xxController;
 
-        PuppetFragment(D2xxController d2xxController) {
+        public PuppetFragment() {
+        }
+
+        public void setD2xxController(D2xxController d2xxController) {
             this.d2xxController = d2xxController;
         }
 
@@ -534,7 +588,9 @@ public class D2xxController implements Handler.Callback {
             try {
                 if (this.d2xxController != null) {
                     this.d2xxController.registerUsbReceiver();
-                    this.d2xxController.onStart();
+                    if (this.d2xxController.uiHandler != null) {
+                        PuppetFragment.this.d2xxController.onStart();
+                    }
                 }
             } catch (RuntimeException e) {
                 e.printStackTrace();
